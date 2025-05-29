@@ -13,10 +13,16 @@ app.use(express.urlencoded({ extended: false }));
 const MemoryStore = memorystore(session);
 app.use(session({
   secret: process.env.SESSION_SECRET || 'social-content-generator-secret',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 24 * 60 * 60 * 1000 },
-  store: new MemoryStore({ checkPeriod: 86400000 }) // prune expired entries every 24h
+  resave: true,
+  saveUninitialized: true,
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production', 
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+  },
+  store: new MemoryStore({ 
+    checkPeriod: 86400000, // prune expired entries every 24h
+    ttl: 7 * 24 * 60 * 60 * 1000 // 7 days
+  })
 }));
 
 app.use((req, res, next) => {

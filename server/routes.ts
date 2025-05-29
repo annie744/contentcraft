@@ -172,6 +172,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Skip events without a start time or hangout/zoom/teams link
             if (!event.start || !event.start.dateTime) continue;
             
+            // Parse and validate dates
+            let startTime: Date;
+            let endTime: Date;
+            try {
+              startTime = new Date(event.start.dateTime);
+              endTime = new Date(event.end.dateTime);
+              
+              // Validate dates
+              if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) {
+                console.error(`Invalid date for event ${event.id}: start=${event.start.dateTime}, end=${event.end.dateTime}`);
+                continue;
+              }
+            } catch (error) {
+              console.error(`Error parsing dates for event ${event.id}:`, error);
+              continue;
+            }
+            
             // Extract meeting links
             let meetingLink = null;
             let platform = null;
@@ -219,8 +236,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               await storage.updateCalendarEvent(existingEvent.id, {
                 title: event.summary,
                 description: event.description,
-                startTime: new Date(event.start.dateTime),
-                endTime: new Date(event.end.dateTime),
+                startTime,
+                endTime,
                 meetingLink,
                 platform,
                 attendees
@@ -232,8 +249,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 eventId: event.id,
                 title: event.summary,
                 description: event.description,
-                startTime: new Date(event.start.dateTime),
-                endTime: new Date(event.end.dateTime),
+                startTime,
+                endTime,
                 meetingLink,
                 platform,
                 attendees,
@@ -743,6 +760,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Force transcript fetch for a specific meeting
+  app.post('/api/meetings/:id/fetch-transcript', requireAuth, async (req, res) => {
+    try {
+      const meetingId = parseInt(req.params.id);
+      if (isNaN(meetingId)) {
+        return res.status(400).json({ message: 'Invalid meeting ID' });
+      }
+      
+      const meeting = await storage.getMeeting(meetingId);
+      if (!meeting || meeting.userId !== req.session.userId) {
+        return res.status(404).json({ message: 'Meeting not found' });
+      }
+
+      if (!meeting.recallBotId) {
+        return res.status(400).json({ message: 'Meeting has no associated bot' });
+      }
+
+      const bot = await storage.getRecallBot(meeting.recallBotId);
+      if (!bot) {
+        return res.status(404).json({ message: 'Bot not found' });
+      }
+
+      console.log(`[Manual Fetch] Attempting to fetch transcript for meeting ${meetingId}`);
+      await recallService.processMeeting(bot);
+      
+      // Get updated meeting data
+      const updatedMeeting = await storage.getMeeting(meetingId);
+      res.json({
+        message: 'Transcript fetch initiated',
+        meeting: updatedMeeting
+      });
+    } catch (error) {
+      console.error('Force transcript fetch error:', error);
+      res.status(500).json({ message: 'Failed to fetch transcript' });
+    }
+  });
+
   // Background task to update bot statuses and process completed meetings
   setInterval(async () => {
     try {
@@ -750,7 +804,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Get all active bots
       const activeBots = await db.select().from(recallBots).where(
-        inArray(recallBots.status, ['scheduled', 'joined', 'recording'])
+        inArray(recallBots.status, ['scheduled', 'joined', 'joining', 'recording'])
       );
       
       console.log(`[Background Task] Found ${activeBots.length} active bots`);
@@ -778,6 +832,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 meetingStatus = 'in_progress';
                 console.log(`[Background Task] Meeting ${meeting.id} started - bot has joined`);
               } else if (updatedBot.status === 'recording') {
+                meetingStatus = 'in_progress';
                 console.log(`[Background Task] Meeting ${meeting.id} is being recorded`);
               } else if (updatedBot.status === 'completed') {
                 meetingStatus = 'completed';

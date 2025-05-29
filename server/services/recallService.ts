@@ -166,6 +166,24 @@ export class RecallService {
 
       // Check if transcription is completed
       if (!recording.transcription_completed_at) {
+        // NEW: Check for transcript object with download_url
+        if (recording.transcript && recording.transcript.data && recording.transcript.data.download_url) {
+          try {
+            console.log(`[Transcript Debug] Found transcript download_url for bot ${botId}, fetching...`);
+            const resp = await fetch(recording.transcript.data.download_url);
+            if (resp.ok) {
+              const transcriptText = await resp.text();
+              if (transcriptText && transcriptText.trim()) {
+                console.log(`[Transcript Debug] Successfully fetched transcript from download_url for bot ${botId}`);
+                return transcriptText;
+              }
+            } else {
+              console.error(`[Transcript Debug] Failed to fetch transcript from download_url for bot ${botId}: ${resp.status}`);
+            }
+          } catch (err) {
+            console.error(`[Transcript Debug] Error fetching transcript from download_url for bot ${botId}:`, err);
+          }
+        }
         console.log(`[Transcript Debug] Transcription not completed yet for bot ${botId}`);
         return null;
       }
@@ -425,6 +443,15 @@ export class RecallService {
       console.error(`[Debug] Error debugging bot ${botId}:`, error);
     }
   }
+}
+
+// Helper to convert Recall JSON transcript to plain text
+export function recallJsonToPlainText(json: any[]): string {
+  return json.map(segment => {
+    const speaker = segment.participant?.name || 'Unknown';
+    const words = (segment.words || []).map((w: any) => w.text).join(' ');
+    return `${speaker}: ${words}`;
+  }).join('\n');
 }
 
 export const recallService = new RecallService();

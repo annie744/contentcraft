@@ -149,7 +149,8 @@ class OAuthService {
       throw new Error('Facebook credentials are missing. Set FACEBOOK_APP_ID and FACEBOOK_REDIRECT_URI environment variables.');
     }
     
-    return `https://www.facebook.com/v17.0/dialog/oauth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=public_profile,email,pages_show_list,pages_manage_posts`;
+    // Try without explicit scope parameter - Facebook will use default permissions
+    return `https://www.facebook.com/v17.0/dialog/oauth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`;
   }
 
   // Handle Facebook OAuth callback
@@ -172,18 +173,22 @@ class OAuthService {
         throw new Error('Failed to get Facebook access token');
       }
       
-      const tokenData = await tokenResponse.json();
+      const tokenData = await tokenResponse.json() as { access_token: string; expires_in: number };
       
-      // Get user info
+      // Get user info - only public_profile fields are available
       const userInfoResponse = await fetch(
-        `https://graph.facebook.com/me?fields=id,name,email,picture&access_token=${tokenData.access_token}`
+        `https://graph.facebook.com/me?fields=id,name,picture&access_token=${tokenData.access_token}`
       );
       
       if (!userInfoResponse.ok) {
         throw new Error('Failed to fetch Facebook user info');
       }
       
-      const userInfo = await userInfoResponse.json();
+      const userInfo = await userInfoResponse.json() as { 
+        id: string; 
+        name: string; 
+        picture?: { data?: { url?: string } } 
+      };
       
       // Save or update Facebook account
       const existingAccount = await storage.getSocialAccountByPlatformAndUserId(userId, 'facebook');
@@ -201,7 +206,7 @@ class OAuthService {
           platformUserId: userInfo.id,
           accessToken: tokenData.access_token,
           name: userInfo.name,
-          email: userInfo.email,
+          email: null, // Email is no longer available through Facebook OAuth
           picture: userInfo.picture?.data?.url,
           expiresAt: new Date(Date.now() + tokenData.expires_in * 1000)
         };
@@ -259,7 +264,7 @@ class OAuthService {
         throw new Error('Failed to get LinkedIn access token');
       }
       
-      const tokenData = await tokenResponse.json();
+      const tokenData = await tokenResponse.json() as { access_token: string; expires_in: number };
       
       // Get user profile
       const profileResponse = await fetch(
@@ -275,7 +280,12 @@ class OAuthService {
         throw new Error('Failed to fetch LinkedIn profile');
       }
       
-      const profileData = await profileResponse.json();
+      const profileData = await profileResponse.json() as {
+        id: string;
+        localizedFirstName: string;
+        localizedLastName: string;
+        profilePicture?: { 'displayImage~'?: { elements?: { identifiers?: { identifier?: string }[] }[] } };
+      };
       
       // Get email address
       const emailResponse = await fetch(
@@ -291,16 +301,20 @@ class OAuthService {
         throw new Error('Failed to fetch LinkedIn email');
       }
       
-      const emailData = await emailResponse.json();
+      const emailData = await emailResponse.json() as { elements: { 'handle~': { emailAddress: string } }[] };
       const email = emailData.elements[0]['handle~'].emailAddress;
       
       // Get profile picture
       let picture = '';
-      if (profileData.profilePicture && 
-          profileData.profilePicture['displayImage~'] &&
-          profileData.profilePicture['displayImage~'].elements &&
-          profileData.profilePicture['displayImage~'].elements.length > 0) {
-        picture = profileData.profilePicture['displayImage~'].elements[0].identifiers[0].identifier;
+      if (
+        profileData.profilePicture &&
+        profileData.profilePicture['displayImage~'] &&
+        profileData.profilePicture['displayImage~'].elements &&
+        profileData.profilePicture['displayImage~'].elements.length > 0 &&
+        profileData.profilePicture['displayImage~'].elements[0].identifiers &&
+        profileData.profilePicture['displayImage~'].elements[0].identifiers.length > 0
+      ) {
+        picture = profileData.profilePicture['displayImage~'].elements[0].identifiers[0].identifier ?? '';
       }
       
       // Save or update LinkedIn account
@@ -348,10 +362,19 @@ class OAuthService {
       }
       
       // Get events from primary calendar
+      const timeMin = new Date();
+      const timeMax = new Date();
+      timeMax.setDate(timeMax.getDate() + 30); // Fetch next 30 days of events
+      
+      console.log(`[Calendar Sync] Fetching events from ${timeMin.toISOString()} to ${timeMax.toISOString()}`);
+      
       const response = await fetch(
-        'https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=100&timeMin=' + 
-        new Date().toISOString() + 
-        '&singleEvents=true&orderBy=startTime',
+        'https://www.googleapis.com/calendar/v3/calendars/primary/events?' +
+        'maxResults=100' +
+        '&timeMin=' + timeMin.toISOString() +
+        '&timeMax=' + timeMax.toISOString() +
+        '&singleEvents=true' +
+        '&orderBy=startTime',
         {
           headers: {
             Authorization: `Bearer ${googleAccount.accessToken}`
@@ -363,7 +386,9 @@ class OAuthService {
         throw new Error('Failed to fetch calendar events');
       }
       
-      return await response.json();
+      const data = (await response.json()) as { [key: string]: any };
+      console.log(`[Calendar Sync] Fetched ${data.items?.length || 0} events from Google Calendar`);
+      return data;
     } catch (error) {
       console.error('Error fetching calendar events:', error);
       throw error;
@@ -415,7 +440,7 @@ class OAuthService {
         throw new Error('Failed to get LinkedIn profile');
       }
       
-      const profile = await profileResponse.json();
+      const profile = (await profileResponse.json()) as { id: string };
       const userUrn = `urn:li:person:${profile.id}`;
       
       // Create share
@@ -467,7 +492,7 @@ class OAuthService {
           throw new Error('Failed to register LinkedIn image upload');
         }
         
-        const registerData = await registerResponse.json();
+        const registerData = (await registerResponse.json()) as { [key: string]: any };
         
         // Get image from URL
         const imageResponse = await fetch(imageUrl);
@@ -545,15 +570,15 @@ class OAuthService {
         throw new Error('Failed to get Facebook pages');
       }
       
-      const pagesData = await pagesResponse.json();
+      const pagesData = await pagesResponse.json() as { data?: { id: string; access_token: string }[] };
       
       if (!pagesData.data || pagesData.data.length === 0) {
         throw new Error('No Facebook pages found. User must have at least one page to post content.');
       }
       
       // Use the first page
-      const page = pagesData.data[0];
-      const pageAccessToken = page.access_token;
+      const page = pagesData.data[0] ?? { id: '', access_token: '' };
+      const pageAccessToken = page.access_token ?? '';
       
       let postData: any = {
         message: content

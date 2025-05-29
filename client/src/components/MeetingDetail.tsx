@@ -21,6 +21,7 @@ interface MeetingDetailProps {
 }
 
 export default function MeetingDetail({ meeting, open, onClose }: MeetingDetailProps) {
+  console.log('MeetingDetail received meeting:', meeting);
   const [activeTab, setActiveTab] = useState("transcript");
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -56,8 +57,8 @@ export default function MeetingDetail({ meeting, open, onClose }: MeetingDetailP
     }
   });
   
-  const followUpEmail = contents?.find(content => content.type === 'follow_up_email');
-  const socialPosts = contents?.filter(content => content.type === 'social_post') || [];
+  const followUpEmail = contents?.find((content: any) => content.type === 'follow_up_email');
+  const socialPosts = contents?.filter((content: any) => content.type === 'social_post') || [];
   
   if (!meeting) return null;
   
@@ -77,74 +78,60 @@ export default function MeetingDetail({ meeting, open, onClose }: MeetingDetailP
   const formatTranscript = () => {
     if (!meeting.transcript) return <p>No transcript available for this meeting.</p>;
     
-    // Simple transcript formatting - in a real app this would be more sophisticated
-    const lines = meeting.transcript.split('\n');
-    const formattedLines = [];
-    
-    let currentSpeaker = '';
-    let currentTimestamp = '';
-    let currentText = [];
-    
-    for (const line of lines) {
-      // Try to detect speaker patterns like "John Doe (10:15:20):"
-      const speakerMatch = line.match(/^([^(]+)\(([^)]+)\):/);
-      
-      if (speakerMatch) {
-        // If we had a previous speaker, add their content
-        if (currentSpeaker) {
-          formattedLines.push({
-            speaker: currentSpeaker,
-            timestamp: currentTimestamp,
-            text: currentText.join(' ')
-          });
-          currentText = [];
-        }
-        
-        currentSpeaker = speakerMatch[1].trim();
-        currentTimestamp = speakerMatch[2].trim();
-        currentText.push(line.substring(speakerMatch[0].length).trim());
-      } else if (line.trim() !== '') {
-        // Continue with current speaker
-        currentText.push(line.trim());
+    // Replace all '\n' and '\\n' with real newlines, then split
+    const normalizedTranscript = meeting.transcript.replace(/\\n|\n/g, '\n');
+    const lines = normalizedTranscript.split(/\n|\r/).filter(Boolean);
+    const messages: any[] = [];
+    let lastSpeaker = '';
+    lines.forEach(line => {
+      // Match: Speaker: message OR Speaker [timestamp]: message OR Speaker (timestamp): message
+      const match = line.match(/^([^:]+?)(?:\s*[\[(](.+?)[\])])?:\s*(.*)$/);
+      if (match) {
+        const speaker = match[1].trim();
+        const timestamp = match[2] ? match[2].trim() : '';
+        const text = match[3].trim();
+        messages.push({ speaker, timestamp, text });
+        lastSpeaker = speaker;
+      } else if (messages.length > 0) {
+        // Continuation of previous message
+        messages[messages.length - 1].text += '\n' + line.trim();
       }
-    }
-    
-    // Add the last speaker's content
-    if (currentSpeaker) {
-      formattedLines.push({
-        speaker: currentSpeaker,
-        timestamp: currentTimestamp,
-        text: currentText.join(' ')
-      });
-    }
-    
-    // If we couldn't parse any speakers, just return the raw transcript
-    if (formattedLines.length === 0) {
+    });
+    if (messages.length === 0) {
       return (
-        <div className="whitespace-pre-wrap">
-          {meeting.transcript}
-        </div>
+        <div className="whitespace-pre-wrap">{meeting.transcript}</div>
       );
     }
-    
     return (
-      <div className="space-y-6">
-        {formattedLines.map((item, index) => {
-          // Generate avatar fallback from speaker name
-          const fallback = item.speaker.split(' ').map(name => name[0]).join('').toUpperCase();
-          
+      <div className="flex flex-col gap-2">
+        {messages.map((item, index) => {
+          const isMe = index % 2 === 1; // Alternate right/left
+          const align = isMe ? 'justify-end' : 'justify-start';
+          const bubbleColor = isMe ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-900';
+          const showAvatar = !isMe && (index === 0 || messages[index - 1].speaker !== item.speaker);
+          const showName = !isMe && (index === 0 || messages[index - 1].speaker !== item.speaker);
+          const initials = item.speaker.split(' ').map((n: string) => n[0]).join('').toUpperCase();
           return (
-            <div key={index} className="mb-6">
-              <div className="flex items-center space-x-3 mb-4 pb-4 border-b border-gray-100">
-                <Avatar className="h-10 w-10">
-                  <AvatarFallback>{fallback}</AvatarFallback>
-                </Avatar>
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{item.speaker}</p>
-                  <p className="text-sm text-gray-500">{item.timestamp}</p>
+            <div key={index} className={`flex ${align} items-end gap-2`}>
+              {!isMe && showAvatar && (
+                <div className="flex flex-col items-center mr-2">
+                  <div className="w-8 h-8 rounded-full bg-gray-400 flex items-center justify-center text-white font-bold text-lg">
+                    {initials}
+                  </div>
                 </div>
+              )}
+              <div className={`rounded-2xl px-4 py-2 ${bubbleColor} shadow max-w-[70%]`} style={{borderBottomRightRadius: isMe ? '0.5rem' : '2rem', borderBottomLeftRadius: !isMe ? '0.5rem' : '2rem'}}>
+                {showName && (
+                  <div className="text-xs font-semibold mb-1 text-gray-700">{item.speaker}</div>
+                )}
+                <div className="whitespace-pre-line text-base">{item.text}</div>
+                {item.timestamp && (
+                  <div className="text-[10px] text-gray-400 text-right mt-1">{item.timestamp}</div>
+                )}
               </div>
-              <p className="text-gray-700">{item.text}</p>
+              {isMe && (
+                <div className="w-8 h-8" />
+              )}
             </div>
           );
         })}
@@ -154,7 +141,7 @@ export default function MeetingDetail({ meeting, open, onClose }: MeetingDetailP
   
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl p-0" closeButton={false}>
+      <DialogContent className="p-0" style={{ maxWidth: '90vw', maxHeight: '90vh', width: '90vw', height: '90vh', overflowY: 'auto' }}>
         <div className="h-full flex flex-col max-h-screen">
           <div className="px-4 py-6 sm:px-6 border-b border-gray-200 bg-gray-50">
             <div className="flex items-start justify-between">
@@ -215,21 +202,10 @@ export default function MeetingDetail({ meeting, open, onClose }: MeetingDetailP
                 value="transcript" 
                 className="absolute inset-0 py-6 px-4 sm:px-6 overflow-y-auto data-[state=inactive]:hidden"
               >
-                <div className="prose max-w-none">
+                <div className="max-w-none bg-white" style={{ maxHeight: '60vh', overflowY: 'auto', padding: '16px' }}>
                   <h3 className="text-lg font-medium text-gray-900 mb-4">Meeting Transcript</h3>
-                  
-                  {meeting.transcript ? (
-                    formatTranscript()
-                  ) : (
-                    <div className="text-center py-10">
-                      <p className="text-gray-500 mb-4">No transcript available for this meeting.</p>
-                      {meeting.status === 'in_progress' && (
-                        <p className="text-sm text-gray-400">
-                          The meeting is still in progress. Transcript will be available after the meeting ends.
-                        </p>
-                      )}
-                    </div>
-                  )}
+                  {/* Messenger/WhatsApp-style chat UI */}
+                  {formatTranscript()}
                 </div>
               </TabsContent>
               
@@ -299,7 +275,7 @@ export default function MeetingDetail({ meeting, open, onClose }: MeetingDetailP
                     </div>
                   ) : socialPosts.length > 0 ? (
                     <div className="space-y-8">
-                      {socialPosts.map(post => (
+                      {socialPosts.map((post: any) => (
                         <SocialMediaPost 
                           key={post.id} 
                           post={post} 

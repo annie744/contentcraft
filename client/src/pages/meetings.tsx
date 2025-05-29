@@ -34,7 +34,7 @@ export default function MeetingsPage() {
   });
   
   // Fetch all meetings
-  const { data: meetings, isLoading: isLoadingMeetings } = useQuery({
+  const { data: meetings = [], isLoading: isLoadingMeetings } = useQuery<Meeting[]>({
     queryKey: ['/api/meetings']
   });
   
@@ -46,8 +46,11 @@ export default function MeetingsPage() {
     }
   }, [singleMeeting]);
   
-  const handleMeetingClick = (meeting: Meeting) => {
-    setSelectedMeeting(meeting);
+  const handleMeetingClick = async (meeting: Meeting) => {
+    // Always fetch the latest meeting details before opening the modal
+    setIsDetailOpen(false);
+    const latest = await fetchMeeting(meeting.id);
+    setSelectedMeeting(latest);
     setIsDetailOpen(true);
     setLocation(`/meetings/${meeting.id}`);
   };
